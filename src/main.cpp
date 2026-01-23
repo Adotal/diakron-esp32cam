@@ -1,65 +1,29 @@
 // main.cpp
 
-// #include <Arduino.h>
-// #include "esp_camera.h"
-// #include <WiFi.h>
-
-// TO TAKE PHOTO
-#include "WiFi.h"
-#include "driver/rtc_io.h"
+#include <Arduino.h>
 #include "esp_camera.h"
-#include "esp_timer.h"
-#include "img_converters.h"
-#include "soc/rtc_cntl_reg.h" // Disable brownout problems
-#include "soc/soc.h"          // Disable brownout problems
-#include <ESPAsyncWebServer.h>
-#include <FS.h>
-#include <HTTPClient.h>
-#include <SPIFFS.h>
-#include <WiFiClientSecure.h>
+#include "WiFi.h"
+#include "AsyncTCP.h"
+#include "ESPAsyncWebServer.h"
+#include "HTTPClient.h"
 
-// ---------------------CONTANTS----------------------
-
-// Camera model
 #define CAMERA_MODEL_AI_THINKER
+#include "camera_pins.h"
 
-// Pinout
-#define PWDN_GPIO_NUM 32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 0
-#define SIOD_GPIO_NUM 26
-#define SIOC_GPIO_NUM 27
-#define Y9_GPIO_NUM 35
-#define Y8_GPIO_NUM 34
-#define Y7_GPIO_NUM 39
-#define Y6_GPIO_NUM 36
-#define Y5_GPIO_NUM 21
-#define Y4_GPIO_NUM 19
-#define Y3_GPIO_NUM 18
-#define Y2_GPIO_NUM 5
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM 23
-#define PCLK_GPIO_NUM 22
+// ------------------------------CONSTANTS------------------
+String lastPrediction;
+const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 
-// ------------------------GLOBAL VARIABLES--------------------
+// Acces Point credentials
+const char *SSID = "PWLAN_1";
+const char *PASW = "244466666";
 
-String lastPrediction = "No data";
-String lastConfidences = "";
-
-// AP credentials
-const char *ssid = "PWLAN_1";
-const char *password = "244466666";
-
-// PHOTOWEB
+// Init wifi server port 80
 AsyncWebServer server(80);
-bool takeNewPhoto = false;
-#define FILE_PHOTO "/photo.jpg"
+AsyncWebSocket ws("/ws");
 
-// Functions prototipes
-void capturePhotoSaveSpiffs(void);
-void sendPhotoToBackend();
-
-const char index_html[] PROGMEM = R"rawliteral(
+const char index_html[] PROGMEM =
+	R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -70,9 +34,9 @@ const char index_html[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div id="container">
-  <h3>AI Result</h3>
-<pre id="result">Waiting...</pre>
+	<div id="container">
+	<h3>AI Result</h3>
+	<p id="result">Waiting...</p>
 
     <h2>ESP32-CAM Last Photo</h2>
     <p>It might take more than 5 seconds to capture a photo.</p>
@@ -80,218 +44,343 @@ const char index_html[] PROGMEM = R"rawliteral(
       <button onclick="capturePhoto()">CAPTURE PHOTO</button>
     </p>
   </div>
-  <div><img src="saved-photo" id="photo" width="70%"></div>
+  <div><img src="" id="photo" width="70%"></div>
 </body>
 <script>
-  
-  function capturePhoto() {
-  fetch("/capture")
-    .then(() => {
-      setTimeout(() => {
-        document.getElementById("photo").src =
-          "saved-photo?t=" + Date.now();
-      }, 200); // espera a que se guarde la nueva foto
-    });
-  }
 
-  function loadResult() {
-  fetch("/result")
-    .then(r => r.json())
-    .then(j => {
+let gateway = `ws://${window.location.hostname}/ws`;
+let websocket;
+window.addEventListener('load', onload);
+
+function onload(event) {
+    initWebSocket();
+}
+
+function initWebSocket() {
+    console.log('Trying to open a WebSocket connection…');
+    websocket = new WebSocket(gateway);
+    websocket.onopen = onOpen;
+    websocket.onclose = onClose;
+    websocket.onmessage = onMessage;
+}
+
+function onOpen(event) {
+    console.log('Connection opened');
+}
+
+function onClose(event) {
+    console.log('Connection closed');
+    setTimeout(initWebSocket, 2000);
+}
+  
+function capturePhoto() {
+	websocket.send("CAPT");
+}
+
+function onMessage(event) {
+
+    // If it's binary → image
+    if (event.data instanceof Blob) {
+        const img = document.getElementById("photo");
+
+        // Release previous image (important for memory)
+        if (img.src) {
+            URL.revokeObjectURL(img.src);
+        }
+
+    	console.log("New img");
+        const url = URL.createObjectURL(event.data);
+        img.src = url;
+        return;
+    } else if (event.data.startsWith('{"')) {
       document.getElementById("result").innerText =
-        JSON.stringify(j, null, 2);
-    });
-  }
-  setInterval(loadResult, 3000);
+        event.data;
+	}
+
+    // Otherwise it's text
+    console.log("WS:", event.data);
+}
 </script>
 </html>)rawliteral";
 
-void setup() {
-  Serial.begin(115200);
+// --------------------------CAMERA CONFIG------------------
+// OV2640 camera module
 
-  // Connect to Wi-Fi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
-  }
-  if (!SPIFFS.begin(true)) {
-    Serial.println("An Error has occurred while mounting SPIFFS");
-    ESP.restart();
-  } else {
-    delay(500);
-    Serial.println("SPIFFS mounted successfully");
-  }
+// OV2640 camera module
+static camera_config_t camera_config = {
 
-  // Print ESP32 Local IP Address
-  Serial.print("IP Address: http://");
-  Serial.println(WiFi.localIP());
+	.pin_pwdn = PWDN_GPIO_NUM,
+	.pin_reset = RESET_GPIO_NUM,
+	.pin_xclk = XCLK_GPIO_NUM,
+	.pin_sccb_sda = SIOD_GPIO_NUM,
+	.pin_sccb_scl = SIOC_GPIO_NUM,
+	.pin_d7 = Y9_GPIO_NUM,
+	.pin_d6 = Y8_GPIO_NUM,
+	.pin_d5 = Y7_GPIO_NUM,
+	.pin_d4 = Y6_GPIO_NUM,
+	.pin_d3 = Y5_GPIO_NUM,
+	.pin_d2 = Y4_GPIO_NUM,
+	.pin_d1 = Y3_GPIO_NUM,
+	.pin_d0 = Y2_GPIO_NUM,
+	.pin_vsync = VSYNC_GPIO_NUM,
+	.pin_href = HREF_GPIO_NUM,
+	.pin_pclk = PCLK_GPIO_NUM,
+	.xclk_freq_hz = 20000000,
+	.ledc_timer = LEDC_TIMER_0,
+	.ledc_channel = LEDC_CHANNEL_0,
+	.pixel_format = PIXFORMAT_JPEG,
+	// FRAMESIZE_UXGA (1600 x 1200)
+	// FRAMESIZE_QVGA (320 x 240)
+	// FRAMESIZE_CIF (352 x 288)
+	// FRAMESIZE_VGA (640 x 480)
+	// FRAMESIZE_SVGA (800 x 600)
+	// FRAMESIZE_XGA (1024 x 768)
+	// FRAMESIZE_SXGA (1280 x 1024)
+	.frame_size = FRAMESIZE_VGA, // (640 x 480)
+	.jpeg_quality = 10,
+	.fb_count = 1,
+	.grab_mode = CAMERA_GRAB_WHEN_EMPTY};
 
-  // Turn-off the 'brownout detector'
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+//-----------------GLOBA VARIABLES-------------------------
+bool takeNewPhoto = false;
 
-  // OV2640 camera module
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sccb_sda = SIOD_GPIO_NUM;
-  config.pin_sccb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-  // config.frame_size = FRAMESIZE_QVGA; // 320x240
-  config.frame_size = FRAMESIZE_VGA; // (640 x 480)
-  config.jpeg_quality = 12;
-  config.fb_count = 1;
+// ----------------------FUNCTIONS--------------------------
 
-  // Camera init
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
-    ESP.restart();
-  }
+// Initialize WiFi
+void initWiFi()
+{
+	WiFi.mode(WIFI_STA);
 
-  // Sensor config
-  sensor_t *s = esp_camera_sensor_get();
-
-  // Auto controls (mantener ON)
-  s->set_gain_ctrl(s, 1);     // AGC
-  s->set_exposure_ctrl(s, 1); // AEC
-  s->set_awb_gain(s, 1);      // AWB
-
-  // Imagen
-  s->set_brightness(s, 0); // -2 .. 2
-  s->set_contrast(s, 1);   // -2 .. 2
-  s->set_saturation(s, 0); // -2 .. 2
-  s->set_sharpness(s, 1);  // 0 .. 3
-
-  // Calidad
-  s->set_denoise(s, 1); // reduce puntos verdes
-  s->set_quality(s, 12);
-
-  // Correcciones ópticas
-  s->set_lenc(s, 1);     // corrección de lente
-  s->set_colorbar(s, 0); // OFF
-
-   // Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/html", index_html);
-  });
-
-  server.on("/capture", HTTP_GET, [](AsyncWebServerRequest *request) {
-    takeNewPhoto = true;
-    request->send(200, "text/plain", "Taking Photo");
-  });
-
-  server.on("/saved-photo", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(SPIFFS, FILE_PHOTO, "image/jpg", false);
-  });
-
-  server.on("/result", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "application/json", lastPrediction);
-  });
-
-  // Start server
-  server.begin();
+	WiFi.begin(SSID, PASW);
+	Serial.print("Connecting to WiFi ..");
+	while (WiFi.status() != WL_CONNECTED)
+	{
+		Serial.print('.');
+		delay(1000);
+	}
+	Serial.println(WiFi.localIP());
 }
 
-void loop() {
-  if (takeNewPhoto) {
-    capturePhotoSaveSpiffs();
-    sendPhotoToBackend();
-    takeNewPhoto = false;
-  }
-  delay(1);
+void notifyClients(String state)
+{
+	ws.textAll(state);
 }
 
-// Capture Photo and Save it to SPIFFS
-void capturePhotoSaveSpiffs(void) {
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
+{
+	AwsFrameInfo *info = (AwsFrameInfo *)arg;
 
-   // The first photo is dismiss because of stabilization
-  // for (int i = 0; i < 2; i++) {
-  //   camera_fb_t *fb = esp_camera_fb_get();
-  //   if (fb)
-  //     esp_camera_fb_return(fb);
-  //   delay(200);
-  // }
+	if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)
+	{
+		String msg;
+		for (size_t i = 0; i < len; i++)
+			msg += (char)data[i];
 
-  // Dismiss previous frame
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (fb)
-    esp_camera_fb_return(fb);
-  delay(50);
+		Serial.print("Received: ");
+		Serial.println(msg);
 
-  Serial.println("Taking photo...");
-  // Taking real photo
-  fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
-  }
+		// --------- Detect message type ---------
+		if (msg.startsWith("MOVE:"))
+		{
 
-  // Open SPIFFSS file
-  File file = SPIFFS.open(FILE_PHOTO, FILE_WRITE);
-  if (!file) {
-    Serial.println("Failed to open file");
-    esp_camera_fb_return(fb);
-    return;
-  }
-  // Write the image
-  file.write(fb->buf, fb->len);
+			// Velocidad es 1 para baja y 2 para alta
+			// dirc es UP o DW
+			// Format: MOVE:dirc&velocidad
 
-  // Close file
-  file.close();
-  esp_camera_fb_return(fb);
+			// Obtiene sólo los datos
+			String payload = msg.substring(5);
 
-  Serial.println("Photo captured and saved in");
-  Serial.print(FILE_PHOTO);
-  Serial.print(" - Size: ");
-  Serial.print(file.size());
-  Serial.println(" bytes");
+			// Obtiene índice del separador &
+			int amp = payload.indexOf("&");
+
+			String direction, velocidad;
+			int velocidad_int;
+
+			if (amp > 0)
+			{
+				// Obtiene dirección
+				// UP or DW
+				direction = payload.substring(0, amp);
+				// 1 or 2
+				velocidad = payload.substring(amp + 1);
+				velocidad_int = velocidad.toInt();
+			}
+
+			Serial.print(direction);
+			Serial.println(velocidad_int);
+
+			notifyClients(direction);
+			//   newRequest = true;
+		}
+
+		else if (msg.equals("CAPT"))
+		{
+			Serial.println("TAKING PHOTO...");
+
+			// TAKE PHOTO
+			takeNewPhoto = true;
+
+			notifyClients("PHOTO TAKEN");
+		}
+		else if (msg.startsWith("ROT:"))
+		{
+		}
+		else
+		{
+			Serial.println("Unknown message type.");
+		}
+	}
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
+{
+	switch (type)
+	{
+	case WS_EVT_CONNECT:
+		Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+		// Notify client of motor current state when it first connects
+		// notifyClients(direction);
+		break;
+	case WS_EVT_DISCONNECT:
+		Serial.printf("WebSocket client #%u disconnected\n", client->id());
+		break;
+	case WS_EVT_DATA:
+		handleWebSocketMessage(arg, data, len);
+		break;
+	case WS_EVT_PONG:
+	case WS_EVT_ERROR:
+		break;
+	}
+}
+
+void initWebSocket()
+{
+	ws.onEvent(onEvent);
+	server.addHandler(&ws);
 }
 
 // This function opens the image in FILE_PHOTOS and sends it to the backend
-void sendPhotoToBackend() {
+void sendPhotoToBackend(camera_fb_t *fb)
+{
 
-  // Open photo in (r)ead mode
-  File file = SPIFFS.open(FILE_PHOTO, "r");
-  if (!file) {
-    Serial.println("Failed to open photo");
-    return;
-  }
+	// WiFiClientSecure client;
+	// client.setInsecure(); // Nota: En producción usa certificados
+	// Añadir en http.begin(client, backendURL)
 
-  WiFiClientSecure client;
-  client.setInsecure();
+	HTTPClient http;
+	http.begin(backendURL);
+	http.addHeader("Content-Type", "image/jpeg");
+	http.setTimeout(4000);  // 4 seconds max to receive backend answer
 
-  HTTPClient http;
-  http.begin(client, "https://diakron-backend.onrender.com/analyze");
-  http.addHeader("Content-Type", "image/jpeg");
 
-  int httpCode = http.sendRequest("POST", &file, file.size());
+	Serial.printf("Enviando %d bytes al backend...\n", fb->len);
+	// Enviamos el buffer directamente de la RAM de la cámara
+	int httpCode = http.sendRequest("POST", fb->buf, fb->len);
 
-  if (httpCode > 0) {
-    String payload = http.getString();
-    Serial.println("Backend response:");
-    Serial.println(payload);
-    lastPrediction = payload;
-  } else {
-    Serial.printf("HTTP error: %d\n", httpCode);
-  }
+	if (httpCode > 0)
+	{
+		lastPrediction = http.getString();
+		Serial.println("Backend Response: " + lastPrediction);
+		// Send response to websocket
+		notifyClients(lastPrediction);
+	}
+	else
+	{
+		Serial.print("Error: " + String(httpCode) + " - ");
+		// Especify error
+		switch (httpCode)
+		{
+		case HTTPC_ERROR_CONNECTION_REFUSED:
+			Serial.println("CONN_REFUSED");
+			break;
+		case HTTPC_ERROR_CONNECTION_LOST:
+			Serial.println("CONN_LOST");
+			break;
+		case HTTPC_ERROR_NO_STREAM:
+			Serial.println("NO_STREAM");
+			break;
+		case HTTPC_ERROR_READ_TIMEOUT:
+			Serial.println("TIMEOUT");
+			break;
+		default:
+			Serial.println("BACKEND_ERR");
+			break;
+		}
+	}
+	http.end();
+}
 
-  // Close file and end connection
-  file.close();
-  http.end();
+void sendPhotoToWebSocket(camera_fb_t *fb)
+{
+	// Send JPEG buffer as binary WS frame
+	ws.binaryAll(fb->buf, fb->len);
+}
+
+esp_err_t cameraCapture()
+{
+	// Dismiss last photo taken
+	camera_fb_t *fb = esp_camera_fb_get();
+	esp_camera_fb_return(fb);
+
+	// capture a frame
+	fb = esp_camera_fb_get();
+	if (!fb)
+	{
+		Serial.print("Frame buffer could not be acquired");
+		return ESP_FAIL;
+	}
+
+	// SEND TO WEBSOCKET SRVR
+	sendPhotoToWebSocket(fb);
+
+	// UPLOAD TO SERVER AND BACKEND
+	sendPhotoToBackend(fb);
+
+	// return the frame buffer back to be reused
+	esp_camera_fb_return(fb);
+
+	return ESP_OK;
+}
+
+void setup()
+{
+	Serial.begin(115200);
+
+	if (psramFound)
+		Serial.print("psramFound");
+
+	initWiFi();
+	initWebSocket();
+
+	// Route for root / web page
+	server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+			  { request->send(200, "text/html", index_html); });
+
+	// Start server
+	server.begin();
+
+	// Camera init
+	esp_err_t err = esp_camera_init(&camera_config);
+	if (err != ESP_OK)
+	{
+		Serial.printf("Camera init failed with error 0x%x", err);
+		ESP.restart();
+	}
+}
+
+void loop()
+{
+
+	if (takeNewPhoto)
+	{
+		takeNewPhoto = false;
+		esp_err_t err = cameraCapture();
+		if (err == ESP_OK)
+		{
+			Serial.print("Photo successfull");
+		};
+		delay(100);
+	}
+
+	ws.cleanupClients();
 }
