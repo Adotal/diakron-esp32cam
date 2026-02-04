@@ -12,6 +12,9 @@
 #include "ArduinoJson.h"
 // For binary payload
 #include "stdint.h"
+// For Ed25519 (signing qr payload)
+#include "Crypto.h"
+#include "Ed25519.h"
 
 // PINS DEFINITION
 #define CAMERA_MODEL_AI_THINKER
@@ -32,6 +35,105 @@ const char *PASW = "F3W411WTET";
 // Init wifi server port 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
+
+// Private Key is a secret
+extern const uint8_t private_key_start[] asm ("_binary_secrets_private_key_ed25516_bin_start");
+extern const uint8_t private_key_end[] asm("_binary_secrets_private_key_ed25516_bin_end");
+// Define private key (its size is 32B)
+const uint8_t *privateKey = private_key_start;
+
+//-----------------GLOBAL VARIABLES-------------------------
+
+/*	This array stores the information of trash thrown to show a QR in the
+	HMI, so the user can earn points.
+	Each cell stores 8 bits, 0-255 DEC.
+	Structure (below are the indexes):
+	[M][P][C][G][Timestamp][Nonce][Firm ED25516]
+	 0  1  2  3  4       7  8  15  16        79
+	M, P, C, G are the count of Metal, Plastic, Cardboard/Paper and Glass
+	respectively, detected by the Segregator (Diakron)
+
+	M			- 1 BYTE
+	P 			- 1 BYTE
+	C			- 1 BYTE
+	G 			- 1 BYTE
+	Timestamp	- 4 BYTE
+	Nonce		- 8 BYTE
+	Firm		- 64 BYTES
+	--------------------------
+	TOTAL		- 80 BYTES
+*/
+uint8_t byteArrayQR[BYTES_QR];
+
+/* This strcuture is made to overlay on byteArrayQR() and write on it
+   in a fast-redable way (before I used directy pointers to the array
+   but it's kind of unsafe and not so redable)
+   The __attribute__((packed)) is to instruct the compiler to minimize
+   the memmory occupied by the structure by removing
+   padding bytes between data
+*/
+
+typedef struct __attribute__((packed))
+{
+	uint8_t countMetal;		// 0
+	uint8_t countPlastic;	// 1
+	uint8_t countCardPaper; // 2
+	uint8_t countGlass;		// 3
+	uint8_t timestamp[4];	// 4–7
+	uint8_t nonce[8];		// 8–15
+	uint8_t signature[64];	// 16–79 (ED25519)
+} qr_payload_t;
+
+// Overlay structure on array, enableing writing on it
+qr_payload_t *payloadQR = (qr_payload_t *)byteArrayQR;
+
+uint8_t publicKey[32] = {
+	0x91,
+	0x96,
+	0x0d,
+	0x0c,
+	0x77,
+	0x1c,
+	0x93,
+	0xe6,
+	0x66,
+	0xc0,
+	0x73,
+	0x43,
+	0x6f,
+	0x1b,
+	0xb3,
+	0xcf,
+	0x0c,
+	0xc2,
+	0x32,
+	0x4e,
+	0xe9,
+	0x82,
+	0xd8,
+	0xdf,
+	0xf6,
+	0xf2,
+	0x86,
+	0x49,
+	0xb8,
+	0x9b,
+	0xea,
+	0x3c,
+};
+
+
+bool inductivo = false;
+bool capacitivo = false;
+bool takeNewPhoto = false;
+
+// Set your Static IP address
+IPAddress local_IP(192, 168, 100, 128);
+// Set your Gateway IP address
+IPAddress gateway(192, 168, 100, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);
+IPAddress secondaryDNS(8, 8, 4, 4);
 
 // --------------------------CAMERA CONFIG------------------
 // OV2640 camera module
@@ -71,67 +173,11 @@ static camera_config_t camera_config = {
 	.fb_count = 1,
 	.grab_mode = CAMERA_GRAB_WHEN_EMPTY};
 
-//-----------------GLOBAL VARIABLES-------------------------
-
-bool inductivo = false;
-bool capacitivo = false;
-bool takeNewPhoto = false;
-
-
-/*	This array stores the information of trash thrown to show a QR in the
-	HMI, so the user can earn points.
-	Each cell stores 8 bits, 0-255 DEC.
-	Structure (below are the indexes):
-	[M][P][C][G][Timestamp][Nonce][Firm ED25516]
-	 0  1  2  3  4       7  8  15  16        79
-	M, P, C, G are the count of Metal, Plastic, Cardboard/Paper and Glass
-	respectively, detected by the Segregator (Diakron)
-	
-	M			- 1 BYTE
-	P 			- 1 BYTE
-	C			- 1 BYTE
-	G 			- 1 BYTE
-	Timestamp	- 4 BYTE
-	Nonce		- 8 BYTE
-	Firm		- 64 BYTES
-	--------------------------
-	TOTAL		- 80 BYTES
-*/
-uint8_t byteArrayQR[BYTES_QR];
-
-/* This strcuture is made to overlay on byteArrayQR() and write on it
-   in a fast-redable way (before I used directy pointers to the array
-   but it's kind of unsafe and not so redable)
-   The __attribute__((packed)) is to instruct the compiler to minimize
-   the memmory occupied by the structure by removing
-   padding bytes between data
-*/
-
-typedef struct __attribute__((packed)) {
-	uint8_t 	countMetal;        // 0
-	uint8_t 	countPlastic;      // 1
-    uint8_t		countCardPaper;    // 2
-    uint8_t		countGlass;        // 3
-    uint8_t		timestamp[4];         // 4–7
-    uint8_t		nonce[8];          // 8–15
-    uint8_t		signature[64];     // 16–79 (ED25519)
-} qr_payload_t;
-
-// Overlay structure on array, enableing writing on it
-qr_payload_t *payloadQR = (qr_payload_t*) byteArrayQR;
-
-// Set your Static IP address
-IPAddress local_IP(192, 168, 100, 128);
-// Set your Gateway IP address
-IPAddress gateway(192, 168, 100, 1);
-IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(8, 8, 8, 8);
-IPAddress secondaryDNS(8, 8, 4, 4);
 
 // ----------------------FUNCTIONS--------------------------
 
-void createSendPayloadQR(){
-
+void createSendPayloadQR()
+{
 }
 
 // Initialize WiFi
@@ -313,7 +359,7 @@ void sendPhotoToWebSocket(camera_fb_t *fb)
 
 	// Send JPEG buffer as binary WS frame
 	ws.binaryAll(fb->buf, fb->len);
-	
+
 	// NOtiify end of IMAGE
 	// ws.textAll("IMG_END");
 }
@@ -391,10 +437,19 @@ void setup()
 {
 	Serial.begin(115200);
 
-	//INICIO PRUEBAS ARRAYQR
+	// INICIO PRUEBAS ARRAYQR
+	// Ed25519::derivePublicKey(publicKey, privateKey);
+
+	Serial.println("Public KEY:");
+	for (int i = 0; i < 32; ++i)
+	{
+		Serial.print("[");
+		Serial.print(privateKey[i], HEX);
+		Serial.print("] ");
+	}
 
 	// Empty byte array QR
-	for(uint8_t i = 0; i < BYTES_QR; ++i)
+	for (uint8_t i = 0; i < BYTES_QR; ++i)
 		byteArrayQR[i] = 0;
 
 	payloadQR->countMetal = 1;
@@ -406,23 +461,30 @@ void setup()
 	Serial.println(miliss);
 
 	// esp_log_timestamp returns Little-Endian binary, converting to Bing-Endian
-	for(int i = 3; i >= 0; --i){
+	for (int i = 3; i >= 0; --i)
+	{
 		// Deja el byte LSB y recorre
-		payloadQR->timestamp[i] = (uint8_t) miliss;
-		miliss = miliss >> 8;	// Recorre ocho bits (lo mismo que dividir entre 256 DEC o 0xFF HEX
+		payloadQR->timestamp[i] = (uint8_t)miliss;
+		miliss = miliss >> 8; // Recorre ocho bits (lo mismo que dividir entre 256 DEC o 0xFF HEX
 	}
 
 	// Fill nonce of random numbers with ESP32 RNG
 	esp_fill_random(payloadQR->nonce, sizeof(payloadQR->nonce));
 
-	for(uint8_t i = 0; i < BYTES_QR; ++i){
+	// Sign payload (16 because signature excludes signature)
+	Ed25519::sign(payloadQR->signature, privateKey, publicKey, byteArrayQR, 16);
+
+	Serial.print(Ed25519::verify(payloadQR->signature, publicKey, byteArrayQR, 16));
+
+	// Imprime payloadQR
+	for (uint8_t i = 0; i < BYTES_QR; ++i)
+	{
 		Serial.print("[");
 		Serial.print(byteArrayQR[i]);
 		Serial.print("] ");
 	}
 
-	//FIN PRUEBAS ARRAYQR
-
+	// FIN PRUEBAS ARRAYQR
 
 	// PIN MODES
 	pinMode(GPIO_INDU, INPUT_PULLUP);
