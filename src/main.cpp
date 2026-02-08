@@ -6,39 +6,48 @@
 // For websocket
 #include "AsyncTCP.h"
 #include "ESPAsyncWebServer.h"
-// To backend request
+// For backend request
 #include "HTTPClient.h"
-// To parse backend response
+// For parsing backend response
 #include "ArduinoJson.h"
 // For binary payload
 #include "stdint.h"
 // For Ed25519 (signing qr payload)
 #include "Crypto.h"
 #include "Ed25519.h"
-
 // For disabling brownout detecor TESTING
-#include "soc/soc.h"             // Access system control
-#include "soc/rtc_cntl_reg.h"    // Access RTC control registers)
+#include "soc/soc.h"		  // Access system control
+#include "soc/rtc_cntl_reg.h" // Access RTC control registers)
+// For I2C (PCF8574 OR MCP23017) as GPIO expansor
+#include "Wire.h"
+#include "PCF8574.h"
 
-// PINS DEFINITION
+// -------------------------PIN DEFINITION & CONSTANTS--------------------------
+
 #define CAMERA_MODEL_AI_THINKER
 #include "camera_pins.h"
 
-#define BYTES_QR 80
 #define GPIO_CAPC 12
 #define GPIO_INDU 13
+#define GPIO_I2C_SDA 15
+#define GPIO_I2C_SCL 14
+#define GPIO_NORMAL_LED 33
 
-// ------------------------------CONSTANTS------------------
-String lastPrediction;
+#define BYTES_QR 80
+
+// Four HC-SR04 ultrasonic sensors, using same trigger pin, different echo
+#define PCF_TRIG P4
+const uint8_t hcsr04_echo_pins[4] = {P0, P1, P2, P3};
+
+// The can depth in centimeters (cm) to measure filling levels
+#define binDepthCm 50
+
+// Where to send the image
 const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 
 // Acces Point credentials
-const char *SSID = "TOTALPLAY_E81F9F";
-const char *PASW = "F3W411WTET";
-
-// Init wifi server port 80
-AsyncWebServer server(80);
-AsyncWebSocket ws("/ws");
+const char *SSID = "Extender-AO";
+const char *PASW = "NewAccessITBlue300";
 
 // Private Key is a secret
 extern const uint8_t private_key_start[] asm("_binary_secrets_private_key_ed25516_bin_start");
@@ -136,6 +145,10 @@ bool capacitive = false;
 // Flag to take photo
 bool takeNewPhoto = false;
 
+// Wifi server port 80
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
 // Set your Static IP address
 IPAddress local_IP(192, 168, 100, 128);
 // Set your Gateway IP address
@@ -143,6 +156,12 @@ IPAddress gateway(192, 168, 100, 1);
 IPAddress subnet(255, 255, 255, 0);
 IPAddress primaryDNS(8, 8, 8, 8);
 IPAddress secondaryDNS(8, 8, 4, 4);
+
+// Store AI segregation response
+String lastPrediction;
+
+// I2C expander on 0x20 address
+PCF8574 pcf8574_0(0x20);
 
 // --------------------------CAMERA CONFIG------------------
 // OV2640 camera module
@@ -182,6 +201,10 @@ static camera_config_t camera_config = {
 	.fb_count = 1,
 	.grab_mode = CAMERA_GRAB_WHEN_EMPTY};
 
+//------------------------FUNCTIONS PROTOTYPES
+
+void sendfillLevels();
+
 // ----------------------FUNCTIONS--------------------------
 
 void createSendPayloadQR()
@@ -209,6 +232,7 @@ void initWiFi()
 	Serial.println(WiFi.localIP());
 }
 
+// Message received from HMI via websocket
 void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 {
 	AwsFrameInfo *info = (AwsFrameInfo *)arg;
@@ -225,7 +249,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 		// --------- Detect message type ---------
 		if (msg.startsWith("MOVE:"))
 		{
-			// Obtiene sólo los datos
+			// Exampe of obtaining payload, vaues separated by &
 			// String payload = msg.substring(5);
 
 			// Obtiene índice del separador &
@@ -243,25 +267,18 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 			// 	velocidad = payload.substring(amp + 1);
 			// 	velocidad_int = velocidad.toInt();
 			// }
-
-			// Serial.print(direction);
-			// Serial.println(velocidad_int);
-
-			// notifyClients(direction);
-			//   newRequest = true;
 		}
 
 		else if (msg.equals("CAPT"))
 		{
 			Serial.println("TAKING PHOTO...");
-
 			// TAKE PHOTO
 			takeNewPhoto = true;
-
-			// notifyClients("PHOTO TAKEN");
 		}
-		else if (msg.startsWith("ROT:"))
+		else if (msg.equals("FL"))
 		{
+			// Send Fill levels
+			sendfillLevels();
 		}
 		else
 		{
@@ -276,6 +293,10 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
 	{
 	case WS_EVT_CONNECT:
 		Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+
+		// Send fill levels on connect
+		sendfillLevels();
+
 		break;
 	case WS_EVT_DISCONNECT:
 		Serial.printf("WebSocket client #%u disconnected\n", client->id());
@@ -497,12 +518,94 @@ void buildSendQRPayload()
 	payloadQR->countGlass = 0;
 }
 
+// Measure HC-SR04 via PCF8574 using pulseIn (high resolution but many I2C requests)
+unsigned long measureDistancePulseIn(uint8_t echo_pin)
+{
+	// Generate trigger pulse using PCF8574
+	pcf8574_0.digitalWrite(PCF_TRIG, LOW);
+	delayMicroseconds(2);
+	pcf8574_0.digitalWrite(PCF_TRIG, HIGH);
+	delayMicroseconds(20); // 10 us is ok but 20 showed better reults
+	pcf8574_0.digitalWrite(PCF_TRIG, LOW);
+
+	// Measure ECHO pulse duration
+	unsigned long duration = pcf8574_0.pulseIn(echo_pin, HIGH, 30000UL); // 30ms timeout
+	unsigned long distanceCm = duration / 29 / 2;
+
+	// Avoid overflow by validation of max depth
+	if (distanceCm > binDepthCm)
+		distanceCm = binDepthCm;
+
+	return distanceCm;
+}
+
+// Send measured percentage levels of bin filling to HMI
+void sendfillLevels()
+{
+	/*
+		This array contains the payload to send Fill Levels as binary
+		It is started by 'F','L' and followed by 4 bytes of each percentage
+		of trash bin in the order: Metal, Plastic, Cardboard/Paper, Glass
+	*/
+	uint8_t fillLevels[6];
+	fillLevels[0] = 'F';
+	fillLevels[1] = 'L';
+
+	Serial.print("FL");
+
+	// Mease 3 times each one and get average, and sends it immediatly
+	for (uint8_t i = 0; i < 4; ++i)
+	{
+		uint16_t sum = 0;
+		for (uint8_t j = 0; j < 3; ++j)
+		{
+			// Get the sum of fill percentages
+			sum += 100 - ( measureDistancePulseIn(hcsr04_echo_pins[i]) * 100 / binDepthCm );
+		}
+
+		// Get the average
+		fillLevels[i + 2] = sum / 3;
+		// fillLevels[i+2] = measureDistancePulseIn(hcsr04_echo_pins[i]);
+		Serial.printf("%d, ", fillLevels[i + 2]);
+	}
+
+	// Sends fill levels
+	ws.binaryAll(fillLevels, sizeof(fillLevels));
+}
+
 void setup()
 {
 	// TESTING
 	WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Disable brownout detector
 
+	// TESTING
 	Serial.begin(115200);
+
+	// SENSORS PIN MODES
+	pinMode(GPIO_INDU, INPUT_PULLUP);
+	pinMode(GPIO_CAPC, INPUT_PULLUP);
+
+	// Turn on INBOARD LED
+	pinMode(GPIO_NORMAL_LED, OUTPUT);
+	digitalWrite(GPIO_NORMAL_LED, 1);
+
+	// HC-SR04 ECHO pins as input
+	for (uint8_t i = 0; i < 4; ++i)
+	{
+		pcf8574_0.pinMode(hcsr04_echo_pins[i], INPUT);
+	}
+	// All 4 ultrasonic have same TRIGGER PIN
+	pcf8574_0.pinMode(PCF_TRIG, OUTPUT);
+
+	// Turn off sensors
+	pcf8574_0.digitalWrite(PCF_TRIG, 0);
+
+	// Initi I2C with custom pins
+	Wire.begin(GPIO_I2C_SDA, GPIO_I2C_SCL);
+
+	// Print message if psram
+	if (psramFound)
+		Serial.println("psramFound");
 
 	// Set materialCount to 0
 	payloadQR->countMetal = 0;
@@ -510,13 +613,7 @@ void setup()
 	payloadQR->countCardPaper = 0;
 	payloadQR->countGlass = 0;
 
-	// PIN MODES
-	pinMode(GPIO_INDU, INPUT_PULLUP);
-	pinMode(GPIO_CAPC, INPUT_PULLUP);
-
-	if (psramFound)
-		Serial.println("psramFound");
-
+	// Start Wifi
 	initWiFi();
 	initWebSocket();
 
@@ -529,6 +626,12 @@ void setup()
 	{
 		Serial.printf("Camera init failed with error 0x%x", err);
 		ESP.restart();
+	}
+
+	// Initialize PCF8574
+	if (!pcf8574_0.begin())
+	{
+		Serial.println(F("Could not initialize PCF8574!"));
 	}
 }
 
