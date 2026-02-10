@@ -33,7 +33,7 @@
 #define GPIO_I2C_SCL 14
 #define GPIO_NORMAL_LED 33
 
-#define BYTES_QR 80
+#define BYTES_QR 88
 
 // Four HC-SR04 ultrasonic sensors, using same trigger pin, different echo
 #define PCF_TRIG P4
@@ -61,20 +61,26 @@ const uint8_t *privateKey = private_key_start;
 	HMI, so the user can earn points.
 	Each cell stores 8 bits, 0-255 DEC.
 	Structure (below are the indexes):
-	[M][P][C][G][Timestamp][Nonce][Firm ED25516]
-	 0  1  2  3  4       7  8  15  16        79
+	[M][WM][P][WP][C][CW][G][GW][Timestamp][Nonce][Firm ED25516]
+	 0  1   3  4   6  7   9  10  12     15  16 23  24        87
 	M, P, C, G are the count of Metal, Plastic, Cardboard/Paper and Glass
-	respectively, detected by the Segregator (Diakron)
+	respectively, detected by the Segregator (Diakron),
+	and MW, PW, CW, GW stands for WeightMetal, WeightPlastic,
+	WeightCardPaper and WeightGlass
 
-	M			- 1 BYTE
-	P 			- 1 BYTE
-	C			- 1 BYTE
-	G 			- 1 BYTE
-	Timestamp	- 4 BYTE
-	Nonce		- 8 BYTE
+	Metal		- 1 BYTE
+	WeightM		- 2 BYTES
+	Plastic		- 1 BYTE
+	WeightP		- 2 BYTES
+	Card-Paper	- 1 BYTE
+	WeightC		- 2 BYTES
+	Glass		- 1 BYTE
+	WeightG		- 2 BYTES
+	Timestamp	- 4 BYTES
+	Nonce		- 8 BYTES
 	Firm		- 64 BYTES
 	--------------------------
-	TOTAL		- 80 BYTES
+	TOTAL		- 88 BYTES
 */
 uint8_t byteArrayQR[BYTES_QR];
 
@@ -83,18 +89,22 @@ uint8_t byteArrayQR[BYTES_QR];
    but it's kind of unsafe and not so redable)
    The __attribute__((packed)) is to instruct the compiler to minimize
    the memmory occupied by the structure by removing
-   padding bytes between data
+   padding bytes between data, on the right are array's indexes
 */
 
 typedef struct __attribute__((packed))
 {
-	uint8_t countMetal;		// 0
-	uint8_t countPlastic;	// 1
-	uint8_t countCardPaper; // 2
-	uint8_t countGlass;		// 3
-	uint8_t timestamp[4];	// 4–7
-	uint8_t nonce[8];		// 8–15
-	uint8_t signature[64];	// 16–79 (ED25519)
+	uint8_t countMetal;			// 0
+	uint8_t weightMetal[2];		// 1
+	uint8_t countPlastic;		// 3
+	uint8_t weightPlastic[2];	// 4
+	uint8_t countCardPaper;		// 6
+	uint8_t weightCardPaper[2]; // 7
+	uint8_t countGlass;			// 9
+	uint8_t weightGlass[2];		// 10
+	uint8_t timestamp[4];		// 12–15
+	uint8_t nonce[8];			// 16–23
+	uint8_t signature[64];		// 24–87 (ED25519)
 } qr_payload_t;
 
 // Overlay structure on array, enableing writing on it
@@ -426,15 +436,14 @@ void selectFinalM()
 	deserializeJson(doc, lastPrediction);
 	String materiaType = doc["predicted"];
 
-	// If not identified is set to false in the last if-else block
-	identified = true;
-
 	if (inductive || materiaType.equals("metal"))
 	{
 		Serial.println("METAL");
 		// notifyClients("METAL");
 		// Increment one
 		payloadQR->countMetal++;
+
+		// SUMAR PESO
 	}
 	else if ((capacitive && materiaType.equals("glass")) || (capacitive && materiaType.equals("plastic")))
 	{
@@ -478,24 +487,23 @@ void buildSendQRPayload()
 	// Get timestamp
 	uint32_t tmp_millis = esp_log_timestamp();
 
-	// esp_log_timestamp returns Little-Endian binary, converting to Big-Endian
-	for (int i = 3; i >= 0; --i)
-	{
-		// Store LSB byte and shifts
-		payloadQR->timestamp[i] = (uint8_t)tmp_millis;
-		// Shift 8 bits to right(same as dividing over 256 DEC or 0xFF HEX)
-		tmp_millis = tmp_millis >> 8;
-	}
+Serial.println(tmp_millis);
+
+	// Saving the number with LSB as MSB like twisting Endianess
+	payloadQR->timestamp[0] = (uint8_t)(tmp_millis >> 24);
+	payloadQR->timestamp[1] = (uint8_t)(tmp_millis >> 16);
+	payloadQR->timestamp[2] = (uint8_t)(tmp_millis >> 8);
+	payloadQR->timestamp[3] = (uint8_t)(tmp_millis);
 
 	// Fill nonce of random numbers with ESP32 RNG
 	esp_fill_random(payloadQR->nonce, sizeof(payloadQR->nonce));
 
-	// Sign payload (16 because is the info to sign)
-	Ed25519::sign(payloadQR->signature, privateKey, publicKey, byteArrayQR, 16);
+	// Sign payload (BYTES_QR -64 because is ONLY the info to sign)
+	Ed25519::sign(payloadQR->signature, privateKey, publicKey, byteArrayQR, BYTES_QR - 64);
 
 	// Print if it was successfull
 	Serial.print("QR BUILD SUCCESS: ");
-	Serial.print(Ed25519::verify(payloadQR->signature, publicKey, byteArrayQR, 16));
+	Serial.print(Ed25519::verify(payloadQR->signature, publicKey, byteArrayQR, BYTES_QR - 64));
 	Serial.println("");
 
 	// Print payloadQR content TESTING
@@ -511,11 +519,8 @@ void buildSendQRPayload()
 	ws.binaryAll(byteArrayQR, 80);
 	ws.textAll("QR_END");
 
-	// Set materialCount to 0
-	payloadQR->countMetal = 0;
-	payloadQR->countPlastic = 0;
-	payloadQR->countCardPaper = 0;
-	payloadQR->countGlass = 0;
+	// Set the whole payload to 0
+	memset(payloadQR, 0, sizeof(*payloadQR));
 }
 
 // Measure HC-SR04 via PCF8574 using pulseIn (high resolution but many I2C requests)
@@ -560,7 +565,9 @@ void sendfillLevels()
 		for (uint8_t j = 0; j < 3; ++j)
 		{
 			// Get the sum of fill percentages
-			sum += 100 - ( measureDistancePulseIn(hcsr04_echo_pins[i]) * 100 / binDepthCm );
+			// Commented for testing
+			// sum += 100 - (measureDistancePulseIn(hcsr04_echo_pins[i]) * 100 / binDepthCm);
+			sum = 1; // TESTING avoid over 0 division
 		}
 
 		// Get the average
@@ -607,11 +614,16 @@ void setup()
 	if (psramFound)
 		Serial.println("psramFound");
 
-	// Set materialCount to 0
-	payloadQR->countMetal = 0;
-	payloadQR->countPlastic = 0;
-	payloadQR->countCardPaper = 0;
-	payloadQR->countGlass = 0;
+	// Set materialCount and weights to 0
+	memset(payloadQR, 0, sizeof(*payloadQR));
+
+	// Test values for weight TESTING
+	payloadQR->weightMetal[0] = (uint8_t)(65535 >> 8);
+	payloadQR->weightMetal[1] = (uint8_t)(65535);
+
+	uint16_t pesoPlastico = 1300;
+	payloadQR->weightPlastic[0] = (uint8_t)(pesoPlastico>> 8);
+	payloadQR->weightPlastic[1] = (uint8_t)(pesoPlastico);
 
 	// Start Wifi
 	initWiFi();
@@ -638,6 +650,8 @@ void setup()
 void loop()
 {
 
+	// If not identified is set to false in the last if-else block
+	identified = true;
 	if (takeNewPhoto)
 	{
 		takeNewPhoto = false;
@@ -649,6 +663,11 @@ void loop()
 
 		// Select materia type and increment corresponding file
 		selectFinalM();
+
+		if (identified == false)
+		{
+			// SI no pudo, intenta otra vez
+		}
 
 		// If it was the last, send signed QR
 		buildSendQRPayload();
