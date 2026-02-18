@@ -1,0 +1,5 @@
+#define GPIO_CAPC 12
+#define GPIO_INDU 13
+#define GPIO_I2C_SDA 15
+#define GPIO_I2C_SCL 14
+#define GPIO_NORMAL_LED 33

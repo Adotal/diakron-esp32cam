@@ -1,6 +1,7 @@
 // main.cpp
 
 #include <Arduino.h>
+#include "config/pins.h"
 #include "esp_camera.h"
 #include "WiFi.h"
 // For websocket
@@ -21,17 +22,13 @@
 // For I2C (PCF8574 OR MCP23017) as GPIO expansor
 #include "Wire.h"
 #include "PCF8574.h"
+// For UI OLED
+#include "ui/service_ui.h"
 
 // -------------------------PIN DEFINITION & CONSTANTS--------------------------
 
 #define CAMERA_MODEL_AI_THINKER
-#include "camera_pins.h"
-
-#define GPIO_CAPC 12
-#define GPIO_INDU 13
-#define GPIO_I2C_SDA 15
-#define GPIO_I2C_SCL 14
-#define GPIO_NORMAL_LED 33
+#include "config/camera_pins.h"
 
 #define BYTES_QR 88
 
@@ -46,8 +43,8 @@ const uint8_t hcsr04_echo_pins[4] = {P0, P1, P2, P3};
 const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 
 // Acces Point credentials
-const char *SSID = "Extender-AO";
-const char *PASW = "NewAccessITBlue300";
+const char *SSID = "INFINITUM6134";
+const char *PASW = "DGkQb3J4DS";
 
 // Private Key is a secret
 extern const uint8_t private_key_start[] asm("_binary_secrets_private_key_ed25516_bin_start");
@@ -637,7 +634,7 @@ void setup()
 	if (err != ESP_OK)
 	{
 		Serial.printf("Camera init failed with error 0x%x", err);
-		ESP.restart();
+		//ESP.restart();
 	}
 
 	// Initialize PCF8574
@@ -645,6 +642,13 @@ void setup()
 	{
 		Serial.println(F("Could not initialize PCF8574!"));
 	}
+
+	// Initialize OLED UI
+	if (!service_ui_init())
+	{
+		Serial.println(F("Could not initialize OLED UI!"));
+	}
+	delay(2000);
 }
 
 void loop()
@@ -676,4 +680,6 @@ void loop()
 	}
 
 	ws.cleanupClients();
+
+	service_ui_update();
 }
