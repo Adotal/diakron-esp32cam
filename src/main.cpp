@@ -512,9 +512,9 @@ Serial.println(tmp_millis);
 	}
 
 	// Send to websocket
-	ws.textAll("QR_BEGIN");
-	ws.binaryAll(byteArrayQR, 80);
-	ws.textAll("QR_END");
+	// ws.textAll("QR_BEGIN");
+	ws.binaryAll(byteArrayQR, sizeof(byteArrayQR));
+	// ws.textAll("QR_END");
 
 	// Set the whole payload to 0
 	memset(payloadQR, 0, sizeof(*payloadQR));
