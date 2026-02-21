@@ -16,11 +16,11 @@ void nema17::begin(){
     driver->pinMode(dirPin, OUTPUT);
     driver->pinMode(enablePin, OUTPUT);
     driver->digitalWrite(enablePin, LOW);
-    calculateRPM();
 }
 
 void nema17::step(){
     driver->digitalWrite(stepPin, HIGH);
+    delayMicroseconds(5);
     driver->digitalWrite(stepPin, LOW);
 }
 
@@ -30,11 +30,4 @@ void nema17::setDirection(bool dir){
 
 void nema17::enable(bool en){
     driver->digitalWrite(enablePin, en ? LOW : HIGH);
-}
-
-void nema17::calculateRPM(){
-    if (RPM_NEMA17 == 0) return; // Avoid division by zero
-
-    pulseInterval = 60000UL / (RPM_NEMA17 * STEPS_PER_REVOLUTION_NEMA17);
-    
 }

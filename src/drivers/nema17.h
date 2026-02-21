@@ -14,8 +14,6 @@ private:
     uint8_t stepPin;
     uint8_t dirPin;
     uint8_t enablePin;
-
-    void calculateRPM();
 public:
     nema17(IPinDriver &driver, uint8_t stepPin, uint8_t dirPin, uint8_t enablePin);
     void begin();

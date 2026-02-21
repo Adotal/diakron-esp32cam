@@ -1,5 +1,15 @@
+// -------------------------PIN DEFINITION & CONSTANTS--------------------------
+#define CAMERA_MODEL_AI_THINKER
+#define BYTES_QR 88
+// Four HC-SR04 ultrasonic sensors, using same trigger pin, different echo
+#define PCF_TRIG P4
+// The can depth in centimeters (cm) to measure filling levels
+#define binDepthCm 50
+
+#define MAX_MOTORS 5 // Adjust this value
+// -------------------------VALUES FOR MOTORS--------------------------
 #define RPM_SENSORS 15
-#define STEPS_PER_REVOLUTION_SENSORS 200
+#define STEPS_PER_REVOLUTION_SENSORS 2048.0
 #define DEFAULT_MAX_RPM 120
 
 #define RPM_NEMA17 120

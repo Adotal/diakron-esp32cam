@@ -1,57 +1,28 @@
 // main.cpp
-
-#include <Arduino.h>
-#include "config/pins.h"
-#include "esp_camera.h"
-#include "WiFi.h"
-// For websocket
-#include "AsyncTCP.h"
-#include "ESPAsyncWebServer.h"
-// For backend request
-#include "HTTPClient.h"
-// For parsing backend response
-#include "ArduinoJson.h"
-// For binary payload
-#include "stdint.h"
-// For Ed25519 (signing qr payload)
-#include "Crypto.h"
-#include "Ed25519.h"
-// For disabling brownout detecor TESTING
-#include "soc/soc.h"		  // Access system control
-#include "soc/rtc_cntl_reg.h" // Access RTC control registers)
-// For I2C (PCF8574 OR MCP23017) as GPIO expansor
-#include "Wire.h"
-#include "PCF8574.h"
-// For UI OLED
-#include "ui/service_ui.h"
+#include "main.h"
 
 // -------------------------PIN DEFINITION & CONSTANTS--------------------------
-
-#define CAMERA_MODEL_AI_THINKER
 #include "config/camera_pins.h"
-
-#define BYTES_QR 88
-
-// Four HC-SR04 ultrasonic sensors, using same trigger pin, different echo
-#define PCF_TRIG P4
 const uint8_t hcsr04_echo_pins[4] = {P0, P1, P2, P3};
-
-// The can depth in centimeters (cm) to measure filling levels
-#define binDepthCm 50
-
 // Where to send the image
 const char *backendURL = "https://diakron-backend.onrender.com/analyze";
-
 // Acces Point credentials
 const char *SSID = "INFINITUM6134";
 const char *PASW = "DGkQb3J4DS";
-
 // Private Key is a secret
 extern const uint8_t private_key_start[] asm("_binary_secrets_private_key_ed25516_bin_start");
 extern const uint8_t private_key_end[] asm("_binary_secrets_private_key_ed25516_bin_end");
 // Define private key (its size is 32B)
 const uint8_t *privateKey = private_key_start;
 
+// --------------------------MOTOR DEFINITIONS--------------------------
+Adafruit_MCP23X17 mcp;
+mcp_driver interfaceI2C(mcp);
+nema17 motorBase(interfaceI2C, 1, 2, 3);
+stepper_28byj motorSensorINDU(interfaceI2C, 4, 5, 6, 7);
+stepper_28byj motorSensorCAPC(interfaceI2C, 8, 9, 10, 11);
+// TESTING MOVE ALL MOTORS AT THE SAME TIME
+motor_manager testManager;
 //-----------------GLOBAL VARIABLES-------------------------
 
 /*	This array stores the information of trash thrown to show a QR in the
@@ -644,10 +615,25 @@ void setup()
 	}
 
 	// Initialize OLED UI
-	if (!service_ui_init())
-	{
+	if (!service_ui_init()){
 		Serial.println(F("Could not initialize OLED UI!"));
 	}
+
+	// Initialize with default address 0x20 on the custom wire
+	if(!mcp.begin_I2C(0x20, &Wire)){
+		Serial.println(F("Could not initialize MCP23017!"));
+	}
+	// Initialize ALL motors
+	motorBase.begin();
+	motorSensorINDU.begin();
+	motorSensorINDU.setDirection(true); // Set direction TESTING
+	motorSensorCAPC.begin();
+	motorSensorCAPC.setDirection(false);
+	// TESTING MOVE ALL MOTORS AT THE SAME TIME
+	testManager.addMotor(&motorBase);
+	testManager.addMotor(&motorSensorINDU);
+	testManager.addMotor(&motorSensorCAPC);
+
 	delay(2000);
 }
 
@@ -682,4 +668,11 @@ void loop()
 	ws.cleanupClients();
 
 	service_ui_update();
+
+	testManager.update();
+
+  // Cálculo de delay
+  	unsigned long delayTime = (60000.0) / (STEPS_PER_REVOLUTION_SENSORS * RPM_SENSORS);
+  
+  	delay(delayTime);
 }

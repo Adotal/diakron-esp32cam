@@ -1,6 +1,6 @@
 #pragma once
 #include "motor.h"
-
+#include "../config/defaults.h"
 /*
     Multi-engine coordinator.
     1. Manage multiple axes
@@ -8,7 +8,6 @@
     3. Enable future synchronization
 */
 
-#define MAX_MOTORS 6
 
 class motor_manager
 {

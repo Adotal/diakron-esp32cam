@@ -11,6 +11,19 @@
     - Use a pin driver
 */
 
+/* 
+    - Example usage mcp_driver:
+        Adafruit_MCP23X17 mcp(0x20);
+        mcp_driver i2cExpander(mcp);
+        nema17 motor1(&i2cExpander, 2, 5, 10);
+        stteper_28byj motor2(&i2cExpander, 5,6,7,8);
+
+    - Example usage direct pin control:
+        gpio_driver gpioDrv;
+        nema17 motor1(&gpioDrv, 2, 5, 10);
+        stepper_28byj motor2(&gpioDrv, 5,6,7,8);
+*/
+
 class motor{
 protected:
     IPinDriver* driver;

@@ -7,6 +7,7 @@ stepper_28byj::stepper_28byj(IPinDriver &driver, uint8_t pin1, uint8_t pin2, uin
     pins[2] = pin3;
     pins[3] = pin4;
     stepIndex = 0;
+    direction = 1;
 }
 
 void stepper_28byj::begin() {
@@ -20,5 +21,13 @@ void stepper_28byj::step() {
     for (int i = 0; i < 4; i++) {
         driver->digitalWrite(pins[i], stepSequence[stepIndex][i]);
     }
-    stepIndex = (stepIndex + 1) % 8; // Move to the next step in the sequence
+    if(direction)
+        stepIndex = (stepIndex + 1) % 8; // Move to the next step in the sequence
+    else
+        stepIndex = (stepIndex + 7) % 8; // Move to the previous step in the sequence
+}
+
+
+void stepper_28byj::setDirection(bool dir) {
+    direction = dir ? 1 : 0;
 }
