@@ -16,13 +16,19 @@ extern const uint8_t private_key_end[] asm("_binary_secrets_private_key_ed25516_
 const uint8_t *privateKey = private_key_start;
 
 // --------------------------MOTOR DEFINITIONS--------------------------
+// Interfaces 
 Adafruit_MCP23X17 mcp;
 mcp_driver interfaceI2C(mcp);
-nema17 motorBase(interfaceI2C, 1, 2, 3);
+gpio_driver interfaceGPIO;
+nema17 motorBase(interfaceI2C, 0, 1, 2);
 stepper_28byj motorSensorINDU(interfaceI2C, 4, 5, 6, 7);
 stepper_28byj motorSensorCAPC(interfaceI2C, 8, 9, 10, 11);
-// TESTING MOVE ALL MOTORS AT THE SAME TIME
-motor_manager testManager;
+
+// Limit switches
+Limits limitBase(interfaceI2C, 3, false);
+// Relationship between limit switches and axes
+axis homeSwitchBase(motorBase, limitBase, 1000, false); // Assuming max travel is 1000 steps and not inverted
+
 //-----------------GLOBAL VARIABLES-------------------------
 
 /*	This array stores the information of trash thrown to show a QR in the
@@ -625,21 +631,19 @@ void setup()
 	}
 	// Initialize ALL motors
 	motorBase.begin();
+	motorBase.setDirection(true); // Set direction TESTING
+	motorBase.setSpeed(60); // Set speed TESTING
+	motorBase.enable(false);
 	motorSensorINDU.begin();
 	motorSensorINDU.setDirection(true); // Set direction TESTING
 	motorSensorCAPC.begin();
 	motorSensorCAPC.setDirection(false);
-	// TESTING MOVE ALL MOTORS AT THE SAME TIME
-	testManager.addMotor(&motorBase);
-	testManager.addMotor(&motorSensorINDU);
-	testManager.addMotor(&motorSensorCAPC);
 
 	delay(2000);
 }
 
 void loop()
 {
-
 	// If not identified is set to false in the last if-else block
 	identified = true;
 	if (takeNewPhoto)
@@ -664,15 +668,22 @@ void loop()
 
 		delay(100);
 	}
-
 	ws.cleanupClients();
+	
+	//service_ui_update();
+	if(Serial.available()){
+		String command = Serial.readStringUntil('\n');
+		if(command.equals("home")){
+			Serial.println("START HOMING");
+			homeSwitchBase.startHoming();
+		}
+		
+	}
+		
+	if(!homeSwitchBase.isHomed()){
+		homeSwitchBase.update();
+	}else if(homeSwitchBase.isHomed()){
+		motorBase.enable(false);
+	}
 
-	service_ui_update();
-
-	testManager.update();
-
-  // Cálculo de delay
-  	unsigned long delayTime = (60000.0) / (STEPS_PER_REVOLUTION_SENSORS * RPM_SENSORS);
-  
-  	delay(delayTime);
 }

@@ -30,6 +30,14 @@ protected:
 public:
     motor(IPinDriver* drv) : driver(drv) {}
     virtual void begin() = 0;
+    virtual void enable(bool en) = 0;
+    virtual void setDirection(bool dir) = 0;
+    virtual void update() = 0;
+    virtual void setSpeed(long rpm) = 0;
     virtual void step() = 0;
+    virtual long getPosition() = 0;
+    virtual void resetPosition(long pos = 0) = 0;
+    virtual long getMaxRPM() = 0;
+    virtual long getDefaultRPM() = 0;
 };
 

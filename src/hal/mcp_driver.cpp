@@ -11,3 +11,7 @@ void mcp_driver::pinMode(uint8_t pin, uint8_t mode) {
 void mcp_driver::digitalWrite(uint8_t pin, uint8_t value) {
     mcp.digitalWrite(pin, value);
 }
+
+int mcp_driver::digitalRead(uint8_t pin) {
+    return mcp.digitalRead(pin);
+}

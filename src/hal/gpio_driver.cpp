@@ -8,3 +8,7 @@ void gpio_driver::pinMode(uint8_t pin, uint8_t mode) {
 void gpio_driver::digitalWrite(uint8_t pin, uint8_t value) {
     ::digitalWrite(pin, value); 
 }
+
+int gpio_driver::digitalRead(uint8_t pin) {
+    return ::digitalRead(pin);
+}

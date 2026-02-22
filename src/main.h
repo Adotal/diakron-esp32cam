@@ -33,5 +33,8 @@
 #include "hal/gpio_driver.h"
 #include "hal/mcp_driver.h"
 
+// For Limits Switches
+#include "core/axis.h"
+
 // For defaults values
 #include "config/defaults.h"
