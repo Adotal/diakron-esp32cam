@@ -12,3 +12,7 @@ void gpio_driver::digitalWrite(uint8_t pin, uint8_t value) {
 int gpio_driver::digitalRead(uint8_t pin) {
     return ::digitalRead(pin);
 }
+
+long gpio_driver::pulseIn(uint8_t pin, uint8_t value, unsigned long timeout) {
+    return ::pulseIn(pin, value, timeout);
+}

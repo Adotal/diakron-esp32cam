@@ -15,3 +15,7 @@ void mcp_driver::digitalWrite(uint8_t pin, uint8_t value) {
 int mcp_driver::digitalRead(uint8_t pin) {
     return mcp.digitalRead(pin);
 }
+
+long mcp_driver::pulseIn(uint8_t pin, uint8_t value, unsigned long timeout) {
+    return mcp.pulseIn(pin, value, timeout);
+}

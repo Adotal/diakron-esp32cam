@@ -4,11 +4,11 @@
 // -------------------------PIN DEFINITION & CONSTANTS--------------------------
 #include "config/camera_pins.h"
 const uint8_t hcsr04_echo_pins[4] = {12, 13, 14, 15};
-// Where to send the image
-const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 // Acces Point credentials
 const char *SSID = "INFINITUM6134";
 const char *PASW = "DGkQb3J4DS";
+// Where to send the image
+const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 // Private Key is a secret
 extern const uint8_t private_key_start[] asm("_binary_secrets_private_key_ed25516_bin_start");
 extern const uint8_t private_key_end[] asm("_binary_secrets_private_key_ed25516_bin_end");
@@ -31,20 +31,28 @@ gpio_driver interfaceGPIO;
 // =====================
 // Motors
 // =====================
-nema17 motorHead(interfaceI2C, 0, 1, 2);
-stepper_28byj motorSensorINDU(interfaceI2C, 8, 9, 10, 11);
-stepper_28byj motorSensorCAPC(interfaceI2C, 12, 13, 14, 15);
+nema17 motorHead(interfaceI2C, HEAD_STEP_PIN, HEAD_DIR_PIN, HEAD_ENABLE_PIN);
+stepper_28byj motorSensorINDU(interfaceI2C, INDU_STEP_PIN_1, INDU_STEP_PIN_2, INDU_STEP_PIN_3, INDU_STEP_PIN_4);
+stepper_28byj motorSensorCAPC(interfaceI2C, CAPC_STEP_PIN_1, CAPC_STEP_PIN_2, CAPC_STEP_PIN_3, CAPC_STEP_PIN_4);
+
+// =====================
+// Sensors
+// =====================
+CapacitiveSensor sensorCAPC(interfaceI2C, GPIO_CAPC);
+InductiveSensor sensorINDU(interfaceI2C, GPIO_INDU);
 
 // =====================
 // Limit switches
 // =====================
-Limits limitHead(interfaceI2C, 3, false);
-Limits limitINDU(interfaceI2C, 4, false);
+Limits limitHead(interfaceI2C, LIMIT_HEAD_PIN, false);
+Limits limitINDU(interfaceI2C, LIMIT_INDU_PIN, false);
+Limits limitCAPC(interfaceI2C, LIMIT_CAPC_PIN, false);
 // =====================
 // Axis (motor + limit)
 // =====================
 axis axisHead(motorHead, limitHead, MAX_TRAVEL_STEPS_BASE, false);
 axis axisINDU(motorSensorINDU, limitINDU, MAX_TRAVEL_STEPS_INDU, false);
+axis axisCAPC(motorSensorCAPC, limitCAPC, MAX_TRAVEL_STEPS_CAPC, false);
 
 // =====================
 // OLED
@@ -65,16 +73,17 @@ InterfaceUI interfaceUI(display, actionButton);
 // Managers
 // =====================
 MotorManager motorManager;
-
+SensorManager sensorManager;
 // =====================
 // Protocols
 // =====================
 MotionProtocol motionP(motorManager, sysController);
 StatusProtocol statusP(sysController);
+SensorProtocol sensorP(sensorManager);
 // =====================
 // Router
 // =====================
-CommandRouter router(motionP, statusP);
+CommandRouter router(motionP, statusP, sensorP);
 
 // =====================
 // System Manager
@@ -177,8 +186,6 @@ bool identified = false;
 bool inductive = false;
 bool capacitive = false;
 
-// Flag to take photo
-bool takeNewPhoto = false;
 
 // Wifi server port 80
 AsyncWebServer server(80);
@@ -197,49 +204,10 @@ String lastPrediction;
 
 // I2C expander on 0x20 address
 PCF8574 pcf8574_0(0x20);
-
 // --------------------------CAMERA CONFIG------------------
-// OV2640 camera module
-
-// OV2640 camera module
-static camera_config_t camera_config = {
-
-	.pin_pwdn = PWDN_GPIO_NUM,
-	.pin_reset = RESET_GPIO_NUM,
-	.pin_xclk = XCLK_GPIO_NUM,
-	.pin_sccb_sda = SIOD_GPIO_NUM,
-	.pin_sccb_scl = SIOC_GPIO_NUM,
-	.pin_d7 = Y9_GPIO_NUM,
-	.pin_d6 = Y8_GPIO_NUM,
-	.pin_d5 = Y7_GPIO_NUM,
-	.pin_d4 = Y6_GPIO_NUM,
-	.pin_d3 = Y5_GPIO_NUM,
-	.pin_d2 = Y4_GPIO_NUM,
-	.pin_d1 = Y3_GPIO_NUM,
-	.pin_d0 = Y2_GPIO_NUM,
-	.pin_vsync = VSYNC_GPIO_NUM,
-	.pin_href = HREF_GPIO_NUM,
-	.pin_pclk = PCLK_GPIO_NUM,
-	.xclk_freq_hz = 20000000,
-	.ledc_timer = LEDC_TIMER_0,
-	.ledc_channel = LEDC_CHANNEL_0,
-	.pixel_format = PIXFORMAT_JPEG,
-	// FRAMESIZE_UXGA (1600 x 1200)
-	// FRAMESIZE_QVGA (320 x 240)
-	// FRAMESIZE_CIF (352 x 288)
-	// FRAMESIZE_VGA (640 x 480)
-	// FRAMESIZE_SVGA (800 x 600)
-	// FRAMESIZE_XGA (1024 x 768)
-	// FRAMESIZE_SXGA (1280 x 1024)
-	.frame_size = FRAMESIZE_VGA, // (640 x 480)
-	.jpeg_quality = 10,
-	.fb_count = 1,
-	.grab_mode = CAMERA_GRAB_WHEN_EMPTY};
-
+CameraService camera(backendURL);
 //------------------------FUNCTIONS PROTOTYPES
-
 void sendfillLevels();
-
 // ----------------------FUNCTIONS--------------------------
 
 void createSendPayloadQR()
@@ -307,8 +275,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 		else if (msg.equals("CAPT"))
 		{
 			Serial.println("TAKING PHOTO...");
-			// TAKE PHOTO
-			takeNewPhoto = true;
+			camera.requestCapture();
 		}
 		else if (msg.equals("FL"))
 		{
@@ -351,66 +318,6 @@ void initWebSocket()
 	server.addHandler(&ws);
 }
 
-// This function opens the image in FILE_PHOTOS and sends it to the backend
-void sendPhotoToBackend(camera_fb_t *fb)
-{
-
-	WiFiClientSecure client;
-	client.setInsecure(); // TESTING Use ceritifcates in production
-	// Añadir en http.begin(client, backendURL)
-
-	HTTPClient http;
-	http.begin(client, backendURL);
-	http.addHeader("Content-Type", "image/jpeg");
-	http.setTimeout(4000); // 4 seconds max to receive backend answer
-
-	Serial.printf("Enviando %d bytes al backend...\n", fb->len);
-	// Enviamos el buffer directamente de la RAM de la cámara
-	int httpCode = http.sendRequest("POST", fb->buf, fb->len);
-
-	if (httpCode > 0)
-	{
-		lastPrediction = http.getString();
-		Serial.println("Backend Response: " + lastPrediction);
-		// Send response to websocket
-		// notifyClients(lastPrediction);
-
-		// const char *lastJSON = lastPrediction.c_str();
-		// // Identify materia type
-		// cJSON *jsonRoot = cJSON_Parse(lastJSON);
-		// if (jsonRoot == NULL)
-		// {
-		// 	printf("Error before: %s\n", cJSON_GetErrorPtr());
-		// 	return;
-		// }
-		// cJSON *jsonmateriaType = cJSON_GetArrayItem(jsonRoot, 2);
-	}
-	else
-	{
-		Serial.print("Error: " + String(httpCode) + " - ");
-		// Especify error
-		switch (httpCode)
-		{
-		case HTTPC_ERROR_CONNECTION_REFUSED:
-			Serial.println("CONN_REFUSED");
-			break;
-		case HTTPC_ERROR_CONNECTION_LOST:
-			Serial.println("CONN_LOST");
-			break;
-		case HTTPC_ERROR_NO_STREAM:
-			Serial.println("NO_STREAM");
-			break;
-		case HTTPC_ERROR_READ_TIMEOUT:
-			Serial.println("TIMEOUT");
-			break;
-		default:
-			Serial.println("BACKEND_ERR");
-			break;
-		}
-	}
-	http.end();
-}
-
 void sendPhotoToWebSocket(camera_fb_t *fb)
 {
 	// Notify that is sending an IMAGE
@@ -422,33 +329,6 @@ void sendPhotoToWebSocket(camera_fb_t *fb)
 	// NOtiify end of IMAGE
 	// ws.textAll("IMG_END");
 }
-
-esp_err_t cameraCapture()
-{
-	// Dismiss last photo taken
-	camera_fb_t *fb = esp_camera_fb_get();
-	esp_camera_fb_return(fb);
-
-	// capture a frame
-	fb = esp_camera_fb_get();
-	if (!fb)
-	{
-		Serial.print("Frame buffer could not be acquired");
-		return ESP_FAIL;
-	}
-
-	// SEND TO WEBSOCKET SRVR
-	// sendPhotoToWebSocket(fb);
-
-	// UPLOAD TO SERVER AND BACKEND
-	sendPhotoToBackend(fb);
-
-	// return the frame buffer back to be reused
-	esp_camera_fb_return(fb);
-
-	return ESP_OK;
-}
-
 // Compare sensor with AI model and select a type
 void selectFinalM()
 {
@@ -612,11 +492,11 @@ void setup()
 
 	// TESTING
 	Serial.begin(SERIAL_BAUD_RATE);
+	Serial.println("Serial started");
 
 	// SENSORS PIN MODES
-	pinMode(GPIO_INDU, INPUT_PULLUP);
-	pinMode(GPIO_CAPC, INPUT_PULLUP);
-
+	//pinMode(GPIO_INDU, INPUT_PULLUP);
+	// pinMode(GPIO_CAPC, INPUT_PULLUP);
 	// Turn on INBOARD LED
 	pinMode(GPIO_NORMAL_LED, OUTPUT);
 	digitalWrite(GPIO_NORMAL_LED, 1);
@@ -660,13 +540,7 @@ void setup()
 	server.begin();
 
 	// Camera init
-	esp_err_t err = esp_camera_init(&camera_config);
-	if (err != ESP_OK)
-	{
-		Serial.printf("Camera init failed with error 0x%x", err);
-		//ESP.restart();
-	}
-
+	camera.init();
 	// Initialize PCF8574
 	if (!pcf8574_0.begin())
 	{
@@ -679,6 +553,12 @@ void setup()
 	}
 	// Initialize ALL motors
 	systemManager.init();
+	sensorCAPC.begin();
+	sensorINDU.begin();
+
+	sensorManager.addSensor('C', &sensorCAPC);
+	sensorManager.addSensor('I', &sensorINDU);
+
 	motorHead.begin();
 	motorHead.enable(false);
 
@@ -689,8 +569,9 @@ void setup()
 	limitHead.begin();
 	limitINDU.begin();
 	// Add axis to manager
-	motorManager.addAxis('A', &axisHead);
-	motorManager.addAxis('B', &axisINDU);
+	motorManager.addAxis('H', &axisHead);
+	motorManager.addAxis('I', &axisINDU);
+	motorManager.addAxis('C', &axisCAPC);
 
 	interfaceUI.begin();
 
@@ -701,14 +582,11 @@ void loop()
 {
 	// If not identified is set to false in the last if-else block
 	identified = true;
-	if (takeNewPhoto)
+	if (camera.hasNewResult())
 	{
-		takeNewPhoto = false;
-		esp_err_t err = cameraCapture();
-		if (err == ESP_OK)
-		{
-			Serial.println("Photo successfull");
-		};
+
+		lastPrediction = camera.getPrediction();
+		Serial.println("Prediction: " + lastPrediction);
 
 		// Select materia type and increment corresponding file
 		selectFinalM();

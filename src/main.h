@@ -45,3 +45,13 @@
 // For system
 #include "system/system_manager.h"
 #include "system/system_controller.h"
+
+// Services
+#include "services/camera_service.h"
+
+// For sesors
+#include "drivers/capacitive_sensor.h"
+#include "drivers/inductive_sensor.h"
+#include "core/sensor.h"
+#include "manager/sensor_manager.h"
+#include "protocols/sensor_protocol.h"

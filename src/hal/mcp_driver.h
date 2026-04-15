@@ -19,4 +19,5 @@ public:
     void pinMode(uint8_t pin, uint8_t mode) override;
     void digitalWrite(uint8_t pin, uint8_t value) override;
     int digitalRead(uint8_t pin) override;
+    long pulseIn(uint8_t pin, uint8_t value, unsigned long timeout) override;
 };

@@ -19,7 +19,7 @@ void nema17::begin(){
     driver->pinMode(stepPin, OUTPUT);
     driver->pinMode(dirPin, OUTPUT);
     driver->pinMode(enablePin, OUTPUT);
-    driver->digitalWrite(enablePin, LOW);
+    driver->digitalWrite(enablePin, HIGH);
 }
 
 void nema17::step() {

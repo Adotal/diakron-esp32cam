@@ -7,7 +7,18 @@ enum class SystemState
     HOMING,
     RUNNING,
     ERROR,
-    ESTOP
+    ESTOP,
+    DETECTED,
+    CAPTURE,
+    WAIT_BACKEND,
+    MOVE_SENSORS,
+    READ_SENSORS,
+    DECIDE,
+    MOVE_BIN,
+    DUMP,
+    RETURN_HOME,
+    GENERATE_QR,
+    SHOW_QR
 };
 
 enum class SystemError

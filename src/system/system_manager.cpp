@@ -43,13 +43,12 @@ void SystemManager::update()
 
 void SystemManager::processCommand(char* cmd)
 {
-    // Si está en ESTOP no aceptar comandos
     if(controller.isEstopped())
         return;
 
     if(!router.route(cmd))
     {
-        controller.setState(SystemState::ERROR);
+        Logger::error("INVALID COMMAND!");
     }
 }
 
