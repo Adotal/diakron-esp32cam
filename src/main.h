@@ -55,3 +55,6 @@
 #include "core/sensor.h"
 #include "manager/sensor_manager.h"
 #include "protocols/sensor_protocol.h"
+
+// For sync time
+#include "time.h"

@@ -5,8 +5,8 @@
 #include "config/camera_pins.h"
 const uint8_t hcsr04_echo_pins[4] = {12, 13, 14, 15};
 // Acces Point credentials
-const char *SSID = "INFINITUM6134";
-const char *PASW = "DGkQb3J4DS";
+const char *SSID = "Extender-AO";
+const char *PASW = "NewAccessITBlue300";
 // Where to send the image
 const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 // Private Key is a secret
@@ -14,6 +14,8 @@ extern const uint8_t private_key_start[] asm("_binary_secrets_private_key_ed2551
 extern const uint8_t private_key_end[] asm("_binary_secrets_private_key_ed25516_bin_end");
 // Define private key (its size is 32B)
 const uint8_t *privateKey = private_key_start;
+// NTP server to request epoch time
+const char *ntpServer = "pool.ntp.org";
 
 // --------------------------MOTOR DEFINITIONS--------------------------
 // =====================
@@ -22,7 +24,7 @@ const uint8_t *privateKey = private_key_start;
 SystemController sysController;
 
 // =====================
-// Interfaces 
+// Interfaces
 // =====================
 Adafruit_MCP23X17 mcp;
 mcp_driver interfaceI2C(mcp);
@@ -185,7 +187,6 @@ bool identified = false;
 // Sensors input
 bool inductive = false;
 bool capacitive = false;
-
 
 // Wifi server port 80
 AsyncWebServer server(80);
@@ -380,6 +381,25 @@ void selectFinalM()
 	}
 }
 
+
+// Get current timestamp to gen QR
+time_t getTime()
+{
+	time_t now;
+	time(&now);
+
+	if (now > 1000000)
+	{ // Verifica que ya se haya sincronizado
+		Serial.print("Unix Timestamp: ");
+		Serial.println(now); // Equivalente a Math.floor(Date.now() / 1000)
+	}
+	else
+	{
+		Serial.println("Sincronizando hora...");
+	}
+	return now;
+}
+
 void buildSendQRPayload()
 {
 
@@ -390,9 +410,14 @@ void buildSendQRPayload()
 	*/
 
 	// Get timestamp
-	uint32_t tmp_millis = esp_log_timestamp();
+	// uint32_t tmp_millis = esp_log_timestamp();
+	uint32_t tmp_millis;
+	do
+	{
+		tmp_millis = getTime();
+	} while (tmp_millis < 1000000);
 
-Serial.println(tmp_millis);
+	Serial.println(tmp_millis);
 
 	// Saving the number with LSB as MSB like twisting Endianess
 	payloadQR->timestamp[0] = (uint8_t)(tmp_millis >> 24);
@@ -495,7 +520,7 @@ void setup()
 	Serial.println("Serial started");
 
 	// SENSORS PIN MODES
-	//pinMode(GPIO_INDU, INPUT_PULLUP);
+	// pinMode(GPIO_INDU, INPUT_PULLUP);
 	// pinMode(GPIO_CAPC, INPUT_PULLUP);
 	// Turn on INBOARD LED
 	pinMode(GPIO_NORMAL_LED, OUTPUT);
@@ -529,12 +554,15 @@ void setup()
 	payloadQR->weightMetal[1] = (uint8_t)(65535);
 
 	uint16_t pesoPlastico = 1300;
-	payloadQR->weightPlastic[0] = (uint8_t)(pesoPlastico>> 8);
+	payloadQR->weightPlastic[0] = (uint8_t)(pesoPlastico >> 8);
 	payloadQR->weightPlastic[1] = (uint8_t)(pesoPlastico);
 
 	// Start Wifi
 	initWiFi();
 	initWebSocket();
+
+	// Configue NTP(0, 0 to obtain UTC without gap)
+	configTime(0, 0, ntpServer);
 
 	// Start server
 	server.begin();
@@ -548,7 +576,8 @@ void setup()
 	}
 
 	// Initialize with default address 0x20 on the custom wire
-	if(!mcp.begin_I2C(0x20, &Wire)){
+	if (!mcp.begin_I2C(0x20, &Wire))
+	{
 		Serial.println(F("Could not initialize MCP23017!"));
 	}
 	// Initialize ALL motors
@@ -604,13 +633,13 @@ void loop()
 	ws.cleanupClients();
 	// Process commands from serial
 
-    systemManager.update();
-    if (Serial.available())
-    {
-        static char buffer[64];
-        size_t len = Serial.readBytesUntil('\n', buffer, sizeof(buffer)-1);
-        buffer[len] = '\0';
+	systemManager.update();
+	if (Serial.available())
+	{
+		static char buffer[64];
+		size_t len = Serial.readBytesUntil('\n', buffer, sizeof(buffer) - 1);
+		buffer[len] = '\0';
 
-        systemManager.processCommand(buffer);
-    }
+		systemManager.processCommand(buffer);
+	}
 }
