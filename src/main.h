@@ -48,6 +48,7 @@
 
 // Services
 #include "services/camera_service.h"
+#include "services/wifi_service.h"
 
 // For sesors
 #include "drivers/capacitive_sensor.h"

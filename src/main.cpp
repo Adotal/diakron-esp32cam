@@ -4,9 +4,6 @@
 // -------------------------PIN DEFINITION & CONSTANTS--------------------------
 #include "config/camera_pins.h"
 const uint8_t hcsr04_echo_pins[4] = {12, 13, 14, 15};
-// Acces Point credentials
-const char *SSID = "INFINITUM6134";
-const char *PASW = "DGkQb3J4DS";
 // Where to send the image
 const char *backendURL = "https://diakron-backend.onrender.com/analyze";
 // Private Key is a secret
@@ -17,12 +14,29 @@ const uint8_t *privateKey = private_key_start;
 
 // --------------------------MOTOR DEFINITIONS--------------------------
 // =====================
+// Services
+// =====================
+
+// WIFI
+// Acces Point credentials
+const char *SSID = "INFINITUM6134";
+const char *PASW = "DGkQb3J4DS";
+WifiService wifiService(SSID, PASW);
+// Set your Static IP address
+IPAddress local_IP(192, 168, 100, 128);
+// Set your Gateway IP address
+IPAddress gateway(192, 168, 100, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);
+IPAddress secondaryDNS(8, 8, 4, 4);
+
+// =====================
 // System Controller
 // =====================
 SystemController sysController;
 
 // =====================
-// Interfaces 
+// Interfaces
 // =====================
 Adafruit_MCP23X17 mcp;
 mcp_driver interfaceI2C(mcp);
@@ -187,18 +201,9 @@ bool identified = false;
 bool inductive = false;
 bool capacitive = false;
 
-
 // Wifi server port 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
-
-// Set your Static IP address
-IPAddress local_IP(192, 168, 100, 128);
-// Set your Gateway IP address
-IPAddress gateway(192, 168, 100, 1);
-IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(8, 8, 8, 8);
-IPAddress secondaryDNS(8, 8, 4, 4);
 
 // Store AI segregation response
 String lastPrediction;
@@ -213,27 +218,6 @@ void sendfillLevels();
 
 void createSendPayloadQR()
 {
-}
-
-// Initialize WiFi
-void initWiFi()
-{
-
-	// Configures static IP address
-	if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS))
-	{
-		Serial.println("STA Failed to configure");
-	}
-
-	// WiFi.mode(WIFI_STA);
-	WiFi.begin(SSID, PASW);
-	Serial.print("Connecting to WiFi ..");
-	while (WiFi.status() != WL_CONNECTED)
-	{
-		Serial.print('.');
-		delay(1000);
-	}
-	Serial.println(WiFi.localIP());
 }
 
 // Message received from HMI via websocket
@@ -334,8 +318,8 @@ void sendPhotoToWebSocket(camera_fb_t *fb)
 void selectFinalM()
 {
 	// Read sensors
-	inductive = !digitalRead(GPIO_INDU);
-	capacitive = !digitalRead(GPIO_CAPC);
+	inductive = sensorINDU.read();
+	capacitive = sensorCAPC.read();
 
 	// GET MATERIA TYPE FROM AI MODEL
 	JsonDocument doc;
@@ -393,7 +377,7 @@ void buildSendQRPayload()
 	// Get timestamp
 	uint32_t tmp_millis = esp_log_timestamp();
 
-Serial.println(tmp_millis);
+	Serial.println(tmp_millis);
 
 	// Saving the number with LSB as MSB like twisting Endianess
 	payloadQR->timestamp[0] = (uint8_t)(tmp_millis >> 24);
@@ -488,16 +472,9 @@ void sendfillLevels()
 
 void setup()
 {
-	// TESTING
-	WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Disable brownout detector
-
-	// TESTING
 	Serial.begin(SERIAL_BAUD_RATE);
-	Serial.println("Serial started");
+	Logger::info("Serial Started");
 
-	// SENSORS PIN MODES
-	//pinMode(GPIO_INDU, INPUT_PULLUP);
-	// pinMode(GPIO_CAPC, INPUT_PULLUP);
 	// Turn on INBOARD LED
 	pinMode(GPIO_NORMAL_LED, OUTPUT);
 	digitalWrite(GPIO_NORMAL_LED, 1);
@@ -530,11 +507,11 @@ void setup()
 	payloadQR->weightMetal[1] = (uint8_t)(65535);
 
 	uint16_t pesoPlastico = 1300;
-	payloadQR->weightPlastic[0] = (uint8_t)(pesoPlastico>> 8);
+	payloadQR->weightPlastic[0] = (uint8_t)(pesoPlastico >> 8);
 	payloadQR->weightPlastic[1] = (uint8_t)(pesoPlastico);
 
 	// Start Wifi
-	initWiFi();
+	wifiService.init(local_IP, gateway, subnet, primaryDNS, secondaryDNS);
 	initWebSocket();
 
 	// Start server
@@ -549,7 +526,8 @@ void setup()
 	}
 
 	// Initialize with default address 0x20 on the custom wire
-	if(!mcp.begin_I2C(0x20, &Wire)){
+	if (!mcp.begin_I2C(0x20, &Wire))
+	{
 		Serial.println(F("Could not initialize MCP23017!"));
 	}
 	// Initialize ALL motors
@@ -575,6 +553,9 @@ void setup()
 	motorManager.addAxis('C', &axisCAPC);
 
 	interfaceUI.begin();
+
+	// Initialize sensors
+	sensorHX711.begin();
 
 	delay(2000);
 }
@@ -605,13 +586,13 @@ void loop()
 	ws.cleanupClients();
 	// Process commands from serial
 
-    systemManager.update();
-    if (Serial.available())
-    {
-        static char buffer[64];
-        size_t len = Serial.readBytesUntil('\n', buffer, sizeof(buffer)-1);
-        buffer[len] = '\0';
+	systemManager.update();
+	if (Serial.available())
+	{
+		static char buffer[64];
+		size_t len = Serial.readBytesUntil('\n', buffer, sizeof(buffer) - 1);
+		buffer[len] = '\0';
 
-        systemManager.processCommand(buffer);
-    }
+		systemManager.processCommand(buffer);
+	}
 }
