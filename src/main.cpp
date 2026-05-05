@@ -254,7 +254,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 		for (size_t i = 0; i < len; i++)
 			msg += (char)data[i];
 
-		Serial.println("Received: ");
+		Serial.print("Received: ");
 		Serial.println(msg);
 
 		// --------- Detect message type ---------
@@ -705,7 +705,6 @@ void loop()
 	{
 
 		lastPrediction = camera.getPrediction();
-		Serial.println("Prediction: " + lastPrediction);
 
 		// Select materia type and increment corresponding file
 		selectFinalM();
