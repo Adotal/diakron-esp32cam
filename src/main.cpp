@@ -254,7 +254,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 		for (size_t i = 0; i < len; i++)
 			msg += (char)data[i];
 
-		Serial.print("Received: ");
+		Serial.println("Received: ");
 		Serial.println(msg);
 
 		// --------- Detect message type ---------
@@ -474,6 +474,7 @@ void buildSendQRPayload()
 		Serial.print(byteArrayQR[i], HEX);
 		Serial.print("] ");
 	}
+	Serial.println("");
 
 	// Send to websocket
 	// ws.textAll("QR_BEGIN");
@@ -536,6 +537,9 @@ void sendfillLevels()
 		// fillLevels[i+2] = measureDistancePulseIn(hcsr04_echo_pins[i]);
 
 
+		// TESTING FILLING LEVELS
+		fillLevels[i + 2] = i * 20;
+		
 		
 
 		Serial.printf("%d, ", fillLevels[i + 2]);
@@ -543,6 +547,8 @@ void sendfillLevels()
 
 	// Sends fill levels
 	ws.binaryAll(fillLevels, sizeof(fillLevels));
+
+	// HERE FILLING LEVELS MUST BE STORED IN BD
 }
 
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
