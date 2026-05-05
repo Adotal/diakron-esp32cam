@@ -37,11 +37,12 @@ void CameraService::init()
     // ---------------- FORMAT ----------------
     config.pixel_format = PIXFORMAT_JPEG;
 
-    // ---------------- QUALITY ----------------
+    // ---------------- QUALITY ----------------    
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 10;
-    config.fb_count = 1;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.fb_count = 2;    // 2 buffers para mayor estabilidad
+    config.fb_location = CAMERA_FB_IN_PSRAM; // USING PSRAM
+    config.grab_mode = CAMERA_GRAB_LATEST;   // Mejor para capturas bajo demanda
 
     // ---------------- INIT CAMERA ----------------
     esp_err_t err = esp_camera_init(&config);
@@ -59,7 +60,7 @@ void CameraService::requestCapture()
 {
     newPhotoAvailable = false;
 
-    camera_fb_t* fb = esp_camera_fb_get();
+    camera_fb_t *fb = esp_camera_fb_get();
     if (!fb)
     {
         Serial.println("Camera capture failed");
@@ -73,61 +74,73 @@ void CameraService::requestCapture()
     newPhotoAvailable = true;
 }
 
-void CameraService::sendPhotoToBackend(camera_fb_t* fb)
+void CameraService::sendPhotoToBackend(camera_fb_t *fb)
 {
-	WiFiClientSecure client;
-	client.setInsecure(); // TESTING Use ceritifcates in production
+    WiFiClientSecure client;
+    client.setInsecure(); // TESTING Use ceritifcates in production
 
-	HTTPClient http;
-	http.begin(client, backendURL);
-	http.addHeader("Content-Type", "image/jpeg");
-	http.setTimeout(30000); // 4 seconds max to receive backend answer
+    // LIMITAR BUFFERS SSL (Ahorra ~20KB de RAM interna)
+    // 512 bytes para recibir (tu JSON es pequeño) y 16384 para enviar (tu foto es grande)
+    // client.setBufferSizes(16384, 512);
 
-	Serial.printf("Enviando %d bytes al backend...\n", fb->len);
-	// We send the buffer directly from the camera's RAM
-	int httpCode = http.sendRequest("POST", fb->buf, fb->len);
+    HTTPClient http;
+    http.begin(client, backendURL);
+    http.addHeader("Content-Type", "image/jpeg");
+    http.setTimeout(30000); // 4 seconds max to receive backend answer
 
-	if (httpCode > 0)
-	{
-		lastPrediction = http.getString();
-		Serial.println("Backend Response: " + lastPrediction);
-		// Send response to websocket
-		// notifyClients(lastPrediction);
+    Serial.printf("Enviando %d bytes al backend...\n", fb->len);
 
-		// const char *lastJSON = lastPrediction.c_str();
-		// // Identify materia type
-		// cJSON *jsonRoot = cJSON_Parse(lastJSON);
-		// if (jsonRoot == NULL)
-		// {
-		// 	printf("Error before: %s\n", cJSON_GetErrorPtr());
-		// 	return;
-		// }
-		// cJSON *jsonmateriaType = cJSON_GetArrayItem(jsonRoot, 2);
-	}
-	else
-	{
-		Serial.print("Error: " + String(httpCode) + " - ");
-		// Especify error
-		switch (httpCode)
-		{
-		case HTTPC_ERROR_CONNECTION_REFUSED:
-			Serial.println("CONN_REFUSED");
-			break;
-		case HTTPC_ERROR_CONNECTION_LOST:
-			Serial.println("CONN_LOST");
-			break;
-		case HTTPC_ERROR_NO_STREAM:
-			Serial.println("NO_STREAM");
-			break;
-		case HTTPC_ERROR_READ_TIMEOUT:
-			Serial.println("TIMEOUT");
-			break;
-		default:
-			Serial.println("BACKEND_ERR");
-			break;
-		}
-	}
-	http.end();
+    // FIX RESTART BUG
+    // Gives time to WifiService, avoiding WDT reset
+    yield();
+
+    // We send the buffer directly from the camera's RAM
+    int httpCode = http.sendRequest("POST", fb->buf, fb->len);
+
+    // FIX RESTART BUG
+    yield();
+
+    if (httpCode > 0)
+    {
+        lastPrediction = http.getString();
+        Serial.println("Backend Response: " + lastPrediction);
+        // Send response to websocket
+        // notifyClients(lastPrediction);
+
+        // const char *lastJSON = lastPrediction.c_str();
+        // // Identify materia type
+        // cJSON *jsonRoot = cJSON_Parse(lastJSON);
+        // if (jsonRoot == NULL)
+        // {
+        // 	printf("Error before: %s\n", cJSON_GetErrorPtr());
+        // 	return;
+        // }
+        // cJSON *jsonmateriaType = cJSON_GetArrayItem(jsonRoot, 2);
+    }
+    else
+    {
+        Serial.print("Error: " + String(httpCode) + " - ");
+        // Especify error
+        switch (httpCode)
+        {
+        case HTTPC_ERROR_CONNECTION_REFUSED:
+            Serial.println("CONN_REFUSED");
+            break;
+        case HTTPC_ERROR_CONNECTION_LOST:
+            Serial.println("CONN_LOST");
+            break;
+        case HTTPC_ERROR_NO_STREAM:
+            Serial.println("NO_STREAM");
+            break;
+        case HTTPC_ERROR_READ_TIMEOUT:
+            Serial.println("TIMEOUT");
+            break;
+        default:
+            Serial.println("BACKEND_ERR");
+            break;
+        }
+    }
+    http.end();
 }
 
 bool CameraService::hasNewResult()
@@ -140,4 +153,3 @@ String CameraService::getPrediction()
     newPhotoAvailable = false;
     return lastPrediction;
 }
-

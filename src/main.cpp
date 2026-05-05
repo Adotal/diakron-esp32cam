@@ -349,6 +349,8 @@ void selectFinalM()
 	deserializeJson(doc, lastPrediction);
 	String materiaType = doc["predicted"];
 
+	Serial.print("TYPE DETECTED: ");
+
 	if (inductive || materiaType.equals("metal"))
 	{
 		Serial.println("METAL");
@@ -448,8 +450,6 @@ void buildSendQRPayload()
 		tmp_millis = getTime();
 	} while (tmp_millis < 1000000);
 
-	Serial.println(tmp_millis);
-
 	// Saving the number with LSB as MSB like twisting Endianess
 	payloadQR->timestamp[0] = (uint8_t)(tmp_millis >> 24);
 	payloadQR->timestamp[1] = (uint8_t)(tmp_millis >> 16);
@@ -517,7 +517,7 @@ void sendfillLevels()
 	fillLevels[0] = 'F';
 	fillLevels[1] = 'L';
 
-	Serial.print("FL");
+	Serial.print("FL: ");
 
 	// Mease 3 times each one and get average, and sends it immediatly
 	for (uint8_t i = 0; i < 4; ++i)
@@ -534,6 +534,10 @@ void sendfillLevels()
 		// Get the average
 		fillLevels[i + 2] = sum / 3;
 		// fillLevels[i+2] = measureDistancePulseIn(hcsr04_echo_pins[i]);
+
+
+		
+
 		Serial.printf("%d, ", fillLevels[i + 2]);
 	}
 
@@ -569,13 +573,16 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
 		if (mesg.equals("QR_SUCCESS"))
 		{
 			// Lógica para abrir puerta, encender led verde, etc.
-			Serial.println("¡Acceso concedido!");
+			Serial.println("Removiendo QR de HMI");
 			ws.textAll("QR_SUCCESS");
 		}
+
+		// This IF is was created for LEARNING purposes of many cases
+		// IS SAFELY DELETABLE
 		else if (mesg.equals("QR_FAILURE"))
 		{
 			// Lógica de error
-			Serial.println("Acceso denegado.");
+			Serial.println("QR FAIL SCAN");
 		}
 		break;
 	}
@@ -707,8 +714,6 @@ void loop()
 
 		delay(100);
 	}
-	ws.cleanupClients();
-	// Process commands from serial
 
 	systemManager.update();
 	if (Serial.available())
@@ -719,4 +724,13 @@ void loop()
 
 		systemManager.processCommand(buffer);
 	}
+
+	/*
+		IMPORTANT
+		This is not an ordinary delay while is critical for
+		Wifi, Http, and websockets to have this time to 'work'
+		IF this time is not given, the WDT will potentially reset the esp32
+		during network processes
+	*/
+	vTaskDelay(10 / portTICK_PERIOD_MS);
 }
