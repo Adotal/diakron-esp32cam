@@ -81,7 +81,7 @@ void CameraService::sendPhotoToBackend(camera_fb_t* fb)
 	HTTPClient http;
 	http.begin(client, backendURL);
 	http.addHeader("Content-Type", "image/jpeg");
-	http.setTimeout(4000); // 4 seconds max to receive backend answer
+	http.setTimeout(30000); // 4 seconds max to receive backend answer
 
 	Serial.printf("Enviando %d bytes al backend...\n", fb->len);
 	// We send the buffer directly from the camera's RAM

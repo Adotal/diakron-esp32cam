@@ -58,3 +58,6 @@
 
 // For sync time
 #include "time.h"
+
+// For server communication
+#include "WebSocketsClient.h"

@@ -9,6 +9,9 @@ const char *SSID = "Extender-AO";
 const char *PASW = "NewAccessITBlue300";
 // Where to send the image
 const char *backendURL = "https://diakron-backend.onrender.com/analyze";
+// TESTING URL
+// const char *backendURL = "http://192.168.100.135:3000/analyze";
+const char *serverURL = "https://diakron-backend.onrender.com/";
 // Private Key is a secret
 extern const uint8_t private_key_start[] asm("_binary_secrets_private_key_ed25516_bin_start");
 extern const uint8_t private_key_end[] asm("_binary_secrets_private_key_ed25516_bin_end");
@@ -194,6 +197,7 @@ bool capacitive = false;
 // Wifi server port 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
+WebSocketsClient webSocket;
 
 // Set your Static IP address
 IPAddress local_IP(192, 168, 100, 128);
@@ -390,7 +394,7 @@ void selectFinalM()
 		PLASTIC - 2 g
 		GLASS - 70 g
 		PAPER - 0 g
-	*/	
+	*/
 
 	// THIS IS HOW MUST BE SET *pesoPlastico is weight reading
 	uint16_t pesoPlastico = 2;
@@ -399,14 +403,12 @@ void selectFinalM()
 
 	payloadQR->weightMetal[1] = (uint8_t)(13);
 
-
 	uint16_t pesoGlass = 70;
 	payloadQR->weightGlass[0] = (uint8_t)(pesoGlass >> 8);
-	payloadQR->weightGlass[1] = (uint8_t)(pesoGlass);	
+	payloadQR->weightGlass[1] = (uint8_t)(pesoGlass);
 
 	// payloadQR->weightCardPaper[1] = (uint8_t)(0);
 }
-
 
 // Get current timestamp to gen QR
 time_t getTime()
@@ -539,8 +541,61 @@ void sendfillLevels()
 	ws.binaryAll(fillLevels, sizeof(fillLevels));
 }
 
+void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
+{
+	switch (type)
+	{
+
+	case WStype_DISCONNECTED:
+		Serial.println("[WS] Disconnected!\n");
+		break;
+	case WStype_CONNECTED:
+		Serial.println("[WS] Conectado al Backend");
+		// Enviar registro inicial
+		{
+			JsonDocument doc;
+			doc["type"] = "REGISTER";
+			doc["id"] = id;
+			String output;
+			serializeJson(doc, output);
+			webSocket.sendTXT(output);
+		}
+		break;
+
+	case WStype_TEXT:
+		String mesg = (char *)payload;
+		Serial.printf("[WS] Mensaje recibido: %s\n", payload);
+
+		if (mesg.equals("QR_SUCCESS"))
+		{
+			// Lógica para abrir puerta, encender led verde, etc.
+			Serial.println("¡Acceso concedido!");
+			ws.textAll("QR_SUCCESS");
+		}
+		else if (mesg.equals("QR_FAILURE"))
+		{
+			// Lógica de error
+			Serial.println("Acceso denegado.");
+		}
+		break;
+	}
+}
+
 void setup()
 {
+
+	// Dirección IP y puerto de tu Node.js
+	// 1. Usamos el dominio, puerto 443 y la ruta "/"
+	// webSocket.beginSSL(host, port, url)
+	webSocket.beginSSL("diakron-backend.onrender.com", 443, "/");
+
+	// 2. Opcional: Si tienes problemas de handshake, puedes intentar
+	// saltarte la validación del certificado (solo para pruebas)
+	// webSocket.setInsecure();
+
+	webSocket.onEvent(webSocketEvent);
+	webSocket.setReconnectInterval(5000);
+
 	// TESTING
 	WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Disable brownout detector
 
@@ -630,6 +685,7 @@ void setup()
 
 void loop()
 {
+	webSocket.loop();
 	// If not identified is set to false in the last if-else block
 	identified = true;
 	if (camera.hasNewResult())
